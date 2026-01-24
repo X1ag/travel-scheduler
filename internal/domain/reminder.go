@@ -9,7 +9,7 @@ type Reminder struct {
 	ID int
 	TripId int
 	UserID int 
-	Message int 
+	Message string 
 	TriggerAt time.Time
 	Status string 
 }

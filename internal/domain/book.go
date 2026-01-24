@@ -22,8 +22,8 @@ func (b *Book) Progress() float64 {
 
 type BookRepository interface {
 	Create(ctx context.Context, book *Book) error 
-	Delete(ctx context.Context, id int) error 
-	GetByUserID(ctx context.Context, userID int) (*[]Book, error)
-	GetByID(ctx context.Context, bookID int) (Book, error)
+	Delete(ctx context.Context, id int64) error 
+	GetByUserID(ctx context.Context, userID int64) ([]*Book, error)
+	GetByID(ctx context.Context, bookID int64) (Book, error)
 	UpdateProgress(ctx context.Context, bookID int64, currentPages int) error
 }
