@@ -9,9 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
 type UserRepository struct {
-	db *pgxpool.Pool 
+	db *pgxpool.Pool
 }
 
 func NewUserRepository(db *pgxpool.Pool) *UserRepository {
@@ -28,12 +27,12 @@ func (u *UserRepository) Create(ctx context.Context, user *domain.User) error {
 
 	if err != nil {
 		var pgErr *pgconn.PgError
-    if errors.As(err, &pgErr) {
-        if pgErr.Code == domain.ErrUniqueViolation { 
-            return domain.ErrUserAlreadyExists 
-        }
-    }
-		return err 
+		if errors.As(err, &pgErr) {
+			if pgErr.Code == domain.ErrUniqueViolation {
+				return domain.ErrUserAlreadyExists
+			}
+		}
+		return err
 	}
 
 	return nil

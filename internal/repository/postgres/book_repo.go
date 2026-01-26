@@ -23,7 +23,7 @@ func (b *BookRepository) Create(ctx context.Context, book *domain.Book) error {
 	query := `INSERT INTO books (user_id, book_name, total_pages, current_pages)
 						VALUES ($1, $2, $3, $4)
 						RETURNING id`
-	err := b.db.QueryRow(ctx, query, &book.UserID, &book.BookName, &book.TotalPages, &book.CurrentPages).Scan(&book.ID)
+	err := b.db.QueryRow(ctx, query, book.UserID, book.BookName, book.TotalPages, book.CurrentPages).Scan(&book.ID)
 
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -72,7 +72,7 @@ func (b *BookRepository) GetByID(ctx context.Context, bookID int64) (*domain.Boo
 }
 
 func (b *BookRepository) UpdateProgress(ctx context.Context, bookID int64, currentPages int) error {
-	query := `TODO: add update query sql here` 
+	query := `UPDATE books SET current_pages = $2 WHERE id = $1` 
 	rows, err := b.db.Exec(ctx, query, bookID, currentPages)
 
 	if err != nil {

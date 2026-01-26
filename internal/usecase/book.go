@@ -2,30 +2,23 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"github.com/X1ag/TravelScheduler/internal/domain"
 )
 
-var (
-	ErrUserIsNotOwner = errors.New("У вас нет прав для редактирования этой книги")
-	ErrPagesOverall = errors.New("Превышено общее количество страниц")
-	ErrPagesMustNonZero = errors.New("Количество страниц должно быть больше нуля")
-	ErrBookNameEmpty = errors.New("Название книги не может быть пустым")
-)
 
 type BookUsecase struct {
-	bookRepo domain.BookRepository 
-	userRepo domain.UserRepository
+	bookRepo     domain.BookRepository
+	userRepo     domain.UserRepository
 	reminderRepo domain.ReminderRepository
 }
 
 func NewBookUsecase(bookRepo domain.BookRepository, userRepo domain.UserRepository, reminderRepo domain.ReminderRepository) *BookUsecase {
 	return &BookUsecase{
-		bookRepo: bookRepo,
-		userRepo: userRepo,
+		bookRepo:     bookRepo,
+		userRepo:     userRepo,
 		reminderRepo: reminderRepo,
 	}
 }
@@ -36,13 +29,13 @@ func (b *BookUsecase) GetByUserID(ctx context.Context, userID int64) ([]*domain.
 
 func (b *BookUsecase) Create(ctx context.Context, book *domain.Book) error {
 	if book.TotalPages <= 0 {
-		return ErrPagesMustNonZero
+		return domain.ErrPagesMustNonZero
 	}
 	if book.BookName == "" {
-		return ErrBookNameEmpty
+		return domain.ErrBookNameEmpty
 	}
 
-	return b.bookRepo.Create(ctx, book) 
+	return b.bookRepo.Create(ctx, book)
 }
 
 func (b *BookUsecase) Delete(ctx context.Context, bookID int64) error {
@@ -52,17 +45,17 @@ func (b *BookUsecase) Delete(ctx context.Context, bookID int64) error {
 func (b *BookUsecase) UpdateProgress(ctx context.Context, userID int64, bookID int64, currentPages int) error {
 	book, err := b.bookRepo.GetByID(ctx, bookID)
 	if err != nil {
-		return err 
+		return err
 	}
 
 	if book.UserID != userID {
-		return ErrUserIsNotOwner 
+		return domain.ErrUserIsNotOwner
 	}
 	if currentPages > book.TotalPages {
-		return ErrPagesOverall
+		return domain.ErrPagesOverall
 	}
 	if currentPages < 0 {
-		return ErrPagesMustNonZero
+		return domain.ErrPagesMustNonZero
 	}
 	err = b.bookRepo.UpdateProgress(ctx, bookID, currentPages)
 	if err != nil {
@@ -70,8 +63,8 @@ func (b *BookUsecase) UpdateProgress(ctx context.Context, userID int64, bookID i
 	}
 	if currentPages == book.TotalPages {
 		_ = b.reminderRepo.Create(ctx, &domain.Reminder{
-			UserID: int(userID),
-			Message: fmt.Sprintf("Вы закончили книгу %s", book.BookName),
+			UserID:    userID,
+			Message:   fmt.Sprintf("Вы закончили книгу %s", book.BookName),
 			TriggerAt: time.Now(),
 		})
 	}

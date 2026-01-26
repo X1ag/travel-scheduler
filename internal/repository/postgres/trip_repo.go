@@ -9,8 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-
-
 type TripRepository struct {
 	db *pgxpool.Pool 
 }
@@ -38,7 +36,7 @@ func (t *TripRepository) Create(ctx context.Context, tr *domain.Trip) error {
 	return nil
 } 
 
-func (t *TripRepository) GetByUserID(ctx context.Context, userID int) ([]*domain.Trip, error) {
+func (t *TripRepository) GetByUserID(ctx context.Context, userID int64) ([]*domain.Trip, error) {
 	query := `SELECT * FROM trips WHERE user_id = $1`
 	rows, err := t.db.Query(ctx, query, userID)
 	if err != nil {
@@ -46,7 +44,7 @@ func (t *TripRepository) GetByUserID(ctx context.Context, userID int) ([]*domain
 	}
 	defer rows.Close()	
 
-	trips := make([]*domain.Trip, 10)
+	trips := make([]*domain.Trip, 0, 10)
 	for rows.Next() {
 		tr := &domain.Trip{}
 		err := rows.Scan(&tr.ID, &tr.UserID, &tr.From, &tr.To, &tr.BookID, &tr.DepartureTime)
