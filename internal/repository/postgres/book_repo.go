@@ -9,11 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var (
-	ErrBookAlreadyExists = errors.New("Книга с такими параметрами уже существует")
-	ErrBookNotFound = errors.New("Книга не найдена")
-)
-
 type BookRepository struct {
 	db *pgxpool.Pool 
 }
@@ -33,8 +28,8 @@ func (b *BookRepository) Create(ctx context.Context, book *domain.Book) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
     if errors.As(err, &pgErr) {
-        if pgErr.Code == ErrUniqueViolation { 
-            return ErrBookAlreadyExists 
+        if pgErr.Code == domain.ErrUniqueViolation { 
+            return domain.ErrBookAlreadyExists 
         }
     }
 		return err 
@@ -43,7 +38,7 @@ func (b *BookRepository) Create(ctx context.Context, book *domain.Book) error {
 	return nil
 } 
 
-func (b *BookRepository) GetByUserID(ctx context.Context, userID int) ([]*domain.Book, error) {
+func (b *BookRepository) GetByUserID(ctx context.Context, userID int64) ([]*domain.Book, error) {
 	query := `SELECT * FROM books WHERE user_id = $1`
 	rows, err := b.db.Query(ctx, query, userID)
 	if err != nil {
@@ -51,7 +46,7 @@ func (b *BookRepository) GetByUserID(ctx context.Context, userID int) ([]*domain
 	}
 	defer rows.Close()
 
-	books := make([]*domain.Book, 10)
+	books := make([]*domain.Book, 0, 10)
 	for rows.Next() {
 		book := &domain.Book{}
 		err := rows.Scan(&book.ID, &book.UserID, &book.BookName, &book.Author, &book.TotalPages, &book.CurrentPages)
@@ -64,8 +59,8 @@ func (b *BookRepository) GetByUserID(ctx context.Context, userID int) ([]*domain
 	return books, nil
 }
 
-func (b *BookRepository) GetByID(ctx context.Context, bookID int) (*domain.Book, error) {
-	query := `SELECT * FROM books WHERE id = $1`
+func (b *BookRepository) GetByID(ctx context.Context, bookID int64) (*domain.Book, error) {
+	query := `SELECT id, user_id, book_name, author, total_pages, current_pages FROM books WHERE id = $1`
 	book := &domain.Book{}
 	err := b.db.QueryRow(ctx, query, bookID).Scan(&book.ID, &book.UserID, &book.BookName, &book.Author, &book.TotalPages, &book.CurrentPages)
 
@@ -76,7 +71,7 @@ func (b *BookRepository) GetByID(ctx context.Context, bookID int) (*domain.Book,
 	return book, nil
 }
 
-func (b *BookRepository) UpdateProgress(ctx context.Context, bookID int, currentPages int) error {
+func (b *BookRepository) UpdateProgress(ctx context.Context, bookID int64, currentPages int) error {
 	query := `TODO: add update query sql here` 
 	rows, err := b.db.Exec(ctx, query, bookID, currentPages)
 
@@ -85,7 +80,7 @@ func (b *BookRepository) UpdateProgress(ctx context.Context, bookID int, current
 	}
 
 	if rows.RowsAffected() == 0 {
-		return ErrBookNotFound
+		return domain.ErrBookNotFound
 	}
 	
 	return nil

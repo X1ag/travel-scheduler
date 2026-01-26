@@ -9,10 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var (
-	ErrUniqueViolation = "23505"
-	ErrUserAlreadyExists = errors.New("Пользователь с таким telegram id уже существует")
-)
 
 type UserRepository struct {
 	db *pgxpool.Pool 
@@ -33,8 +29,8 @@ func (u *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
     if errors.As(err, &pgErr) {
-        if pgErr.Code == ErrUniqueViolation { 
-            return ErrUserAlreadyExists 
+        if pgErr.Code == domain.ErrUniqueViolation { 
+            return domain.ErrUserAlreadyExists 
         }
     }
 		return err 

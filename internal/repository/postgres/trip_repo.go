@@ -9,9 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var (
-	ErrTripAlreadyExists = errors.New("Поездка с такими параметрами уже существует")
-)
+
 
 type TripRepository struct {
 	db *pgxpool.Pool 
@@ -31,8 +29,8 @@ func (t *TripRepository) Create(ctx context.Context, tr *domain.Trip) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
     if errors.As(err, &pgErr) {
-        if pgErr.Code == ErrUniqueViolation { 
-            return ErrTripAlreadyExists 
+        if pgErr.Code == domain.ErrUniqueViolation { 
+            return domain.ErrTripAlreadyExists 
         }
     }
 		return err

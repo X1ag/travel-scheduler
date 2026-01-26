@@ -2,7 +2,14 @@ package domain
 
 import (
 	"context"
+	"errors"
 )
+
+var (
+	ErrBookAlreadyExists = errors.New("Книга с такими параметрами уже существует")
+	ErrBookNotFound = errors.New("Книга не найдена")
+)
+
 
 type Book struct {
 	ID int64

@@ -1,6 +1,14 @@
 package domain
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var (
+	ErrUniqueViolation = "23505"
+	ErrUserAlreadyExists = errors.New("Пользователь с таким telegram id уже существует")
+)
 
 type User struct {
 				ID 					int64

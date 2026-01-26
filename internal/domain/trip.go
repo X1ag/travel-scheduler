@@ -2,7 +2,12 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrTripAlreadyExists = errors.New("Поездка с такими параметрами уже существует")
 )
 
 type Trip struct {
