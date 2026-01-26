@@ -6,12 +6,12 @@ import (
 )
 
 type Trip struct {
-	TripID int64 
-	UserID int64 // telegram id юзера, который едет 
-	From string
-	To string 
-	BookID int64 // книга, которую читаем
-	DepartureTime time.Time // время отъезда
+	ID 						int64  // trip id 
+	UserID 				int64 `db:"user_id"`// user id from database, whos traveling 
+	From 					string `db:"from_station"`
+	To 						string `db:"to_station"`
+	BookID 				*int64 `db:"book_id"` 
+	DepartureTime time.Time  `db:"departure_time"`
 }
 
 type TripRepository interface {
