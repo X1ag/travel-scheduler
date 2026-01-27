@@ -34,6 +34,6 @@ type BookRepository interface {
 	Create(ctx context.Context, book *Book) error
 	Delete(ctx context.Context, id int64) error
 	GetByUserID(ctx context.Context, userID int64) ([]*Book, error)
-	GetByID(ctx context.Context, bookID int64) (Book, error)
+	GetByID(ctx context.Context, bookID int64) (*Book, error)
 	UpdateProgress(ctx context.Context, bookID int64, currentPages int) error
 }

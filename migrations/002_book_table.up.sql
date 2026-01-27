@@ -4,6 +4,6 @@ CREATE TABLE IF NOT EXISTS books (
 	book_name VARCHAR(255) NOT NULL UNIQUE,
 	total_pages INT NOT NULL,
 	current_pages INT NOT NULL
-)
+);
 
 CREATE INDEX IF NOT EXISTS idx_books_user_id ON books(user_id);

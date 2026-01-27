@@ -22,7 +22,7 @@ var (
 
 type Reminder struct {
 	ID        int64     `db:"id"`
-	TripId    int64     `db:"trip_id"`
+	TripID    int64     `db:"trip_id"`
 	UserID    int64     `db:"user_id"`
 	Message   string    `db:"message"`
 	TriggerAt time.Time `db:"trgger_at"`

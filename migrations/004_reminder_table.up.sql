@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS reminders (
 	trigger_at TIMESTAMP WITH TIME ZONE NOT NULL,
 	status VARCHAR(255) NOT NULL DEFAULT 'pending',
 	CONSTRAINT check_status CHECK (status IN ('pending', 'sent', 'failed', 'cancelled'))
-)
+);
 
 CREATE INDEX IF NOT EXISTS idx_reminders_trigger_at_pending 
 ON reminders(trigger_at) 

@@ -22,5 +22,5 @@ type Trip struct {
 
 type TripRepository interface {
 	Create(ctx context.Context, trip *Trip) error
-	GetByUserID(ctx context.Context, userId int) ([]*Trip, error)
+	GetByUserID(ctx context.Context, userId int64) ([]*Trip, error)
 }

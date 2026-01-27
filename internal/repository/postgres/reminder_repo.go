@@ -24,7 +24,7 @@ func (r *ReminderRepository) Create(ctx context.Context, reminder *domain.Remind
 	query := `INSERT INTO reminders (trip_id, user_id, message, trigger_at, status)
 						VALUES ($1, $2, $3, $4, $5)
 						RETURNING id`
-	err := r.db.QueryRow(ctx, query, reminder.TripId, reminder.UserID, reminder.Message, reminder.TriggerAt, domain.StatusPending).Scan(&reminder.ID)
+	err := r.db.QueryRow(ctx, query, reminder.TripID, reminder.UserID, reminder.Message, reminder.TriggerAt, domain.StatusPending).Scan(&reminder.ID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -57,7 +57,7 @@ func (r *ReminderRepository) GetPending(ctx context.Context, now time.Time) ([]*
 	pendings := make([]*domain.Reminder, 0, 10)
 	for rows.Next() {
 		reminder := &domain.Reminder{}
-		err := rows.Scan(&reminder.ID, &reminder.TripId, &reminder.UserID, &reminder.Message, &reminder.TriggerAt, &reminder.Status)
+		err := rows.Scan(&reminder.ID, &reminder.TripID, &reminder.UserID, &reminder.Message, &reminder.TriggerAt, &reminder.Status)
 		if err != nil {
 			return nil, err
 		}

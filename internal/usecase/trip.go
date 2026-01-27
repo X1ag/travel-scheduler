@@ -3,15 +3,13 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/X1ag/TravelScheduler/internal/domain"
 )
 
-/// rostov code - 9612913
-// taganrog code - 9613483
-// api code - 6f7478e5-151e-436d-b8ba-ace9a4c05375
 
-///https://api.rasp.yandex-net.ru/v3.0/search/?apikey=6f7478e5-151e-436d-b8ba-ace9a4c05375&format=json&transport_types=suburban&from=s9613483&to=s9612913&lang=ru_RU&page=1&date=2026-01-23
 
 var (
 	ErrDepartureTimeEmpty = errors.New("Время отправления не может быть пустым")
@@ -20,11 +18,15 @@ var (
 
 type TripUsecase struct {
 	tripRepo domain.TripRepository
+	reminderRepo domain.ReminderRepository
+	yandex domain.ScheduleProvider
 }
 
-func NewTripUsecase(tr domain.TripRepository) *TripUsecase {
+func NewTripUsecase(tr domain.TripRepository, rr domain.ReminderRepository, yandex domain.ScheduleProvider) *TripUsecase {
 	return &TripUsecase{
 		tripRepo: tr,
+		yandex: yandex,
+		reminderRepo: rr,
 	}
 }
 
@@ -38,6 +40,54 @@ func (t *TripUsecase) Create(ctx context.Context, tr *domain.Trip) error {
 	return t.tripRepo.Create(ctx, tr)
 }
 
-func (t *TripUsecase) GetByUserID(ctx context.Context, userID int) ([]*domain.Trip, error) {
+func (t *TripUsecase) GetByUserID(ctx context.Context, userID int64) ([]*domain.Trip, error) {
 	return t.tripRepo.GetByUserID(ctx, userID)
+}
+
+func (t *TripUsecase) Search(ctx context.Context, from, to string, startDate time.Time) ([]*domain.Schedule, error) {
+	allOptions, err := t.yandex.GetNextTrains(ctx, from, to, startDate)
+	if err != nil {
+		return nil, err
+	}
+	
+	filteredOptions := t.filteredOptions(allOptions, startDate)
+
+	// retry 
+	if len(filteredOptions) == 0 {
+		tomorrow := time.Date(startDate.Year(), startDate.Month(), startDate.Day()+1, 0, 0, 0, 0, startDate.Location())
+		tomorrowOptions, err := t.yandex.GetNextTrains(ctx, from, to, tomorrow)
+		if err != nil {
+			return nil, err
+		}
+		filteredOptions = t.filteredOptions(tomorrowOptions, tomorrow)	
+	}
+
+	if len(filteredOptions) > 5 {
+		filteredOptions = filteredOptions[:5]
+	}
+
+	return filteredOptions, nil
+}
+
+func (t *TripUsecase) filteredOptions(options []*domain.Schedule, date time.Time) []*domain.Schedule {
+	result := make([]*domain.Schedule, 0, 10)
+	for _, opt := range options {
+		if opt.DepartureTime.After(date) || opt.DepartureTime.Equal(date) {
+			result = append(result, opt)
+		}
+	}
+	return result 
+}
+
+func (t *TripUsecase) ConfirmTrip(ctx context.Context, tr *domain.Trip) error {
+	if err := t.Create(ctx, tr); err != nil {
+		return err
+	}
+	return t.reminderRepo.Create(ctx, &domain.Reminder{
+		TripID:    tr.ID,
+		UserID:    tr.UserID,
+		Message:   fmt.Sprintf("Вы начали поездку %s", tr.From),
+		TriggerAt: tr.DepartureTime.Add(-30 * time.Minute),
+		Status: string(domain.StatusPending),
+	})
 }

@@ -85,3 +85,12 @@ func (b *BookRepository) UpdateProgress(ctx context.Context, bookID int64, curre
 	
 	return nil
 }
+
+func (b *BookRepository) Delete(ctx context.Context, bookID int64) error {
+	query := `DELETE FROM books WHERE id = $1`
+	_, err := b.db.Exec(ctx, query, bookID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
