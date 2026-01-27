@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/X1ag/TravelScheduler/internal/infrastructure/yandex"
@@ -26,32 +28,11 @@ func main() {
 	tripRepo := postgres.NewTripRepository(pool)
 	reminderRepo := postgres.NewReminderRepository(pool)
 	
-	yandexKey := "6f7478e5-151e-436d-b8ba-ace9a4c05375"
+	yandexKey := os.Getenv("YANDEX_API_KEY") 
 	yandexClient := yandex.NewClient(yandexKey)
 
 	tripUC := usecase.NewTripUsecase(tripRepo, reminderRepo, yandexClient)
 	// bookUC := usecase.NewBookUsecase(bookRepo, userRepo, reminderRepo)
 
-	log.Println("test")
-
-	from := "s9613483"
-	to := "s9612913"
-	now := time.Now()
-	tomorrow := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
-	trains, err := tripUC.Search(ctx, from, to, tomorrow)
-	if err != nil {
-		log.Fatalf("cannot search trains: %v", err)
-	}
-
-	if len(trains) == 0 {
-		log.Println("no trains found")
-		return
-	}
-
-	for _, t := range trains {
-		log.Printf("- %s | Отправление: %s | Номер: %s\n", 
-			t.Title, 
-			t.DepartureTime.Format("15:04"), 
-			t.TrainNumber)
-	}
+	slog.Info("bot started", tripUC)
 }
