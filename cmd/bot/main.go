@@ -5,7 +5,6 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/X1ag/TravelScheduler/internal/infrastructure/yandex"
 	"github.com/X1ag/TravelScheduler/internal/repository/postgres"
