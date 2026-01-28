@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -19,11 +20,17 @@ import (
 type yandexResponse struct {
 	Segments []struct {
 		DepartureTime time.Time `json:"departure"`
+		ArrivalTime time.Time `json:"arrival"`
+		Duration float64 `json:"duration"`
 		Thread struct {
 			Number string `json:"number"`
 			Title string `json:"title"`
 		} `json:"thread"`
 	} `json:"segments"`
+}
+
+type failderResponse struct {
+ // TODO: implement failed
 }
 
 type Client struct {
@@ -44,6 +51,7 @@ func (c *Client) GetNextTrains(ctx context.Context, from, to string, date time.T
 
 	url := fmt.Sprintf("https://api.rasp.yandex-net.ru/v3.0/search/?apikey=%s&format=json&transport_types=suburban&from=%s&to=%s&lang=ru_RU&page=1&date=%s", c.apiKey, from, to, date.Format("2006-01-02"))
 
+	log.Println(url)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -52,9 +60,9 @@ func (c *Client) GetNextTrains(ctx context.Context, from, to string, date time.T
 	defer resp.Body.Close()
 	
 	if resp.StatusCode != http.StatusOK {
+		// TODO: return failed "text" 
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
-
 	var data yandexResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		return nil, err
@@ -63,9 +71,10 @@ func (c *Client) GetNextTrains(ctx context.Context, from, to string, date time.T
 	var options []*domain.Schedule 
 	for _, s := range data.Segments {
 		options = append(options, &domain.Schedule{
-			TrainNumber: s.Thread.Number,
 			Title: s.Thread.Title,
 			DepartureTime: s.DepartureTime,
+			ArrivalTime: s.ArrivalTime,
+			Duration: s.Duration,
 		})
 	}
 

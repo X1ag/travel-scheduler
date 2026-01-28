@@ -97,14 +97,14 @@ func (b *Bot) GetSchedule(ctx context.Context, botClient *bot.Bot, update *model
 	date := time.Now()
 
 	if len(splited) == 4 {
-		layout := "15:36:01"
-		userTime := splited[4]	
+		layout := "15:04"
+		userTime := splited[3]	
 		t, err := time.Parse(layout, userTime)
 		if err != nil {
 			fmt.Println("Error parsing time:", err)
 			return
 		}
-		date = time.Date(date.Year(), date.Month(), date.Day(), t.Hour(), t.Minute(), t.Second(), 0, date.Location())
+		date = time.Date(date.Year(), date.Month(), date.Day(), t.Hour(), t.Minute(), 0, 0, date.Location())
 		log.Println("parsedTime is:", t)
 		log.Println(date)
 	}	
@@ -119,20 +119,23 @@ func (b *Bot) GetSchedule(ctx context.Context, botClient *bot.Bot, update *model
 	}
 	resultText := "Рейсы \n"
 	for _, opt := range options {
-		resultText = resultText + fmt.Sprintf("%s %s %s\n", opt.Title, opt.DepartureTime, opt.TrainNumber)
+		resultText = resultText + fmt.Sprintf("%s %s %s %f\n", opt.Title, opt.DepartureTime, opt.ArrivalTime, opt.Duration)
 	}
 	log.Println("result text:", resultText)
-	botClient.SendMessage(ctx, &bot.SendMessageParams{
+	_, err = botClient.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   resultText,
-		ParseMode: models.ParseModeMarkdown,
+		// ParseMode: models.ParseModeMarkdown,
 	})
+	if err != nil {
+		log.Println(err)
+	}
 }
 
 func (b *Bot) RegisterHandlers() {
     b.client.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, b.DefaultHandler)
     b.client.RegisterHandler(bot.HandlerTypeMessageText, "/createUser", bot.MatchTypeExact, b.RegisterUser)
-    b.client.RegisterHandler(bot.HandlerTypeMessageText, "/getSchedule", bot.MatchTypeExact, b.GetSchedule)
+    b.client.RegisterHandler(bot.HandlerTypeMessageText, "/getSchedule", bot.MatchTypePrefix, b.GetSchedule)
 }
 
 func sendErrorMessage(err error, ctx context.Context, botClient *bot.Bot, update *models.Update) error {

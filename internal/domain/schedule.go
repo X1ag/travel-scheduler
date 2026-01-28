@@ -11,10 +11,10 @@ var (
 )
 
 type Schedule struct {
-	TrainNumber string
 	Title string 
-	DepartureTime time.Time
-	ArrivalTime time.Time
+	DepartureTime time.Time `json:"departure"`
+	ArrivalTime time.Time `json:"arrival"`
+	Duration float64 `json:"duration"`
 }
 
 type ScheduleProvider interface {
