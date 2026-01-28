@@ -2,7 +2,12 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+var (
+	ErrInvalidInput = errors.New("Неправильный ввод\\. Формат ввода: <откуда\\> <куда\\> <дата\\> <время в формате 15:36:01\\>")
 )
 
 type Schedule struct {
