@@ -2,8 +2,10 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"log"
 
+	"github.com/X1ag/TravelScheduler/internal/domain"
 	"github.com/X1ag/TravelScheduler/internal/usecase"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -29,13 +31,13 @@ func (b *Bot) Start(ctx context.Context) {
 	b.client.Start(ctx)
 }
 
-func (b *Bot) AddClient(client *bot.Bot) {
-	b.client = client
+func (b *Bot) AddClient(botClient *bot.Bot) {
+	b.client = botClient
 }
 
-func DefaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (b *Bot) DefaultHandler(ctx context.Context, botClient *bot.Bot, update *models.Update) {
 	log.Printf("Получено сообщение: %s", update.Message.Text)
-	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   "Hello, world\\!",
 		ParseMode: models.ParseModeMarkdown,
@@ -45,14 +47,44 @@ func DefaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 }
 
-func (b *Bot) SecondHandler(ctx context.Context, update *models.Update) {
+func (b *Bot) SecondHandler(ctx context.Context, botClient *bot.Bot, update *models.Update) {
 	log.Printf("Получено сообщение: %s", update.Message.Text)
-	_, err := b.client.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
-		Text:   "dont write me\\!",
+		Text:   "i try to reg user, wait\\!",
 		ParseMode: models.ParseModeMarkdown,
 	})
 	if err != nil {
 		log.Println(err)
 	}
+	user := &domain.User{
+		TelegramID: update.Message.From.ID,
+		Name:       update.Message.From.FirstName,
+		Username:   update.Message.From.Username,
+	}
+
+	err = b.userUC.Create(ctx, user)
+	if err != nil {
+		_, err = botClient.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("Error: %s", err.Error()),
+			ParseMode: models.ParseModeMarkdown,
+		})	
+	}
+	_, err = botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   fmt.Sprintf("user is created\\! ID: %d",user.ID),
+		ParseMode: models.ParseModeMarkdown,
+	})
+	if err != nil {
+		log.Println(err)
+	}
+	log.Println("User created with id", user.ID)
+}
+
+func (b *Bot) RegisterHandlers() {
+    // Регистрируем конкретные команды
+    b.client.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, b.DefaultHandler)
+    
+    b.client.RegisterHandler(bot.HandlerTypeMessageText, "/createUser", bot.MatchTypeExact, b.SecondHandler)
 }

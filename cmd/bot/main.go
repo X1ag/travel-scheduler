@@ -45,15 +45,15 @@ func main() {
 	botWrapped := telegram.NewBot(nil, tripUC, bookUC, userUC)
 
 	opts := []bot.Option{
-		bot.WithDefaultHandler(telegram.DefaultHandler),
+		bot.WithDefaultHandler(botWrapped.DefaultHandler),
 	}
 
 	botClient, err := bot.New(os.Getenv("BOT_TOKEN"), opts...)
 	if err != nil {
 		log.Fatal(err)
 	}
-	
-	botWrapped.AddClient(botClient)
 
+	botWrapped.AddClient(botClient)
+	botWrapped.RegisterHandlers()
 	botWrapped.Start(ctx)
 }
