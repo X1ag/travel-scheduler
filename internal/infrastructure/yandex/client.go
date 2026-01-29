@@ -71,6 +71,7 @@ func (c *Client) GetNextTrains(ctx context.Context, from, to string, date time.T
 	var options []*domain.Schedule 
 	for _, s := range data.Segments {
 		options = append(options, &domain.Schedule{
+			TrainID: s.Thread.Number,
 			Title: s.Thread.Title,
 			DepartureTime: s.DepartureTime,
 			ArrivalTime: s.ArrivalTime,

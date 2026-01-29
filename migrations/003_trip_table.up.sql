@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS trips (
 
 	book_id BIGINT REFERENCES books(id) ON DELETE SET NULL, 
 
-	DepartureTime TIMESTAMP WITH TIME ZONE NOT NULL
+	departure_time TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_trips_user_id ON trips(user_id);

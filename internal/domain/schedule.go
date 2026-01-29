@@ -11,6 +11,7 @@ var (
 )
 
 type Schedule struct {
+	TrainID string
 	Title string 
 	DepartureTime time.Time `json:"departure"`
 	ArrivalTime time.Time `json:"arrival"`

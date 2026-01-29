@@ -13,10 +13,13 @@ var (
 type User struct {
 	ID         int64 `db:"id"`
 	TelegramID int64 `db:"telegram_id"`
+	ChatID 		 int64 `db:"chat_id"`
 	Name       string `db:"name"`
 	Username   string `db:"username"`
 }
 
 type UserRepository interface {
 	Create(ctx context.Context, user *User) error
+	GetByTelegramID(ctx context.Context, telegramID int64) (*User, error)
+	GetByID(ctx context.Context, userID int64) (*User, error)
 }

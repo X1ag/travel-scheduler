@@ -27,3 +27,11 @@ func (u *UserUsecase) Create(ctx context.Context, user *domain.User) error {
 	}
 	return u.userRepo.Create(ctx, user)
 }
+
+func (u *UserUsecase) GetUserByTelegramID(ctx context.Context, telegramID int64) (*domain.User, error) {
+	return u.userRepo.GetByTelegramID(ctx, telegramID)
+}
+
+func (u *UserUsecase) GetUserByID(ctx context.Context, userID int64) (*domain.User, error) {
+	return u.userRepo.GetByID(ctx, userID)
+}
