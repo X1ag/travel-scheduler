@@ -48,7 +48,7 @@ func (r *ReminderRepository) MarkAsSent(ctx context.Context, id int64) error {
 }
 
 func (r *ReminderRepository) GetPending(ctx context.Context, now time.Time) ([]*domain.Reminder, error) {
-	query := `SELECT (id, trip_id, user_id, message, trigger_at, status) FROM reminders WHERE status = $1 and trigger_at <= $2`
+	query := `SELECT id, trip_id, user_id, message, trigger_at, status FROM reminders WHERE status = $1 and trigger_at <= $2`
 	rows, err := r.db.Query(ctx, query, domain.StatusPending, now)
 	if err != nil {
 		return nil, err

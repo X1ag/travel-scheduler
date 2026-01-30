@@ -13,7 +13,6 @@ var (
 type User struct {
 	ID         int64 `db:"id"`
 	TelegramID int64 `db:"telegram_id"`
-	ChatID 		 int64 `db:"chat_id"`
 	Name       string `db:"name"`
 	Username   string `db:"username"`
 }

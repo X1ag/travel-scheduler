@@ -9,6 +9,7 @@ import (
 	"github.com/X1ag/TravelScheduler/internal/repository/postgres"
 	"github.com/X1ag/TravelScheduler/internal/usecase"
 	"github.com/X1ag/TravelScheduler/transport/telegram"
+	"github.com/X1ag/TravelScheduler/transport/worker"
 	"github.com/go-telegram/bot"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -50,6 +51,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	worker.NewWorker(tripUC, bookUC, userUC, reminderRepo, botWrapped).StartPolling(ctx, 1)
 
 	botWrapped.AddClient(botClient)
 	botWrapped.RegisterHandlers()

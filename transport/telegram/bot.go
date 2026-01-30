@@ -104,7 +104,6 @@ func (b *Bot) AddClient(botClient *bot.Bot) {
 func (b *Bot) StartHandler(ctx context.Context, botClient *bot.Bot, update *models.Update) {
 	telegramID := update.Message.From.ID
 	
-	// Автоматически регистрируем пользователя
 	_, err := b.ensureUser(ctx, telegramID, update.Message.From.FirstName, update.Message.From.Username)
 	if err != nil {
 		log.Printf("Ошибка регистрации пользователя: %v", err)
@@ -156,12 +155,10 @@ func (b *Bot) HelpHandler(ctx context.Context, botClient *bot.Bot, update *model
 func (b *Bot) NewTripHandler(ctx context.Context, botClient *bot.Bot, update *models.Update) {
 	telegramID := update.Message.From.ID
 
-	if b.userSessions[telegramID] != nil {
+	if b.userSessions[telegramID] == nil {
 		_, err := b.ensureUser(ctx, telegramID, update.Message.From.FirstName, update.Message.From.Username)
 		if err != nil {
 			log.Printf("Ошибка регистрации пользователя: %v", err)
-			sendErrorMessage(err, ctx, botClient, update)
-			return
 		}
 	}
 	
@@ -530,7 +527,6 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) {
 	_, err := b.client.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
-		ParseMode: models.ParseModeMarkdown,
 	})
 	if err != nil {
 		log.Println(err)
