@@ -11,6 +11,7 @@ import (
 
 	"github.com/X1ag/TravelScheduler/internal/domain"
 	"github.com/X1ag/TravelScheduler/internal/usecase"
+	"github.com/X1ag/TravelScheduler/internal/utils"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
@@ -18,18 +19,29 @@ import (
 type UserState string
 
 const (
-	StateNone        UserState = "none"
+	StateNone            UserState = "none"
+	StateSelectingFrom   UserState = "selecting_from"     // Inline station buttons
+	StateSelectingTo     UserState = "selecting_to"       // Inline station buttons
+	StateShowingSchedule UserState = "showing_schedule"   // Paginated results
+	// Legacy states for backward compatibility during migration
 	StateWaitingFrom UserState = "waiting_from"
 	StateWaitingTo   UserState = "waiting_to"
-	StateShowingSchedule UserState = "showing_schedule"
 )
 
 type UserSession struct {
-	State    UserState
-	From     string
-	To       string
+	State        UserState
+	StateHistory []UserState // For back navigation
+
+	From     string // Station code
+	FromName string // Display name
+	To       string // Station code
+	ToName   string // Display name
 	Date     time.Time
-	Schedule []*domain.Schedule
+	Schedule []*domain.Schedule // Full schedule (not limited to 5)
+
+	SchedulePage   int              // Current page for pagination
+	RecentStations []utils.StationOption  // Last 5 used stations
+	LastMessageID  int              // For editing messages
 }
 
 type Bot struct {
@@ -71,6 +83,42 @@ func (b *Bot) clearSession(telegramID int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.userSessions, telegramID)
+}
+
+// ParseCallback parses callback data into action and parameters
+// Format: action:param1:param2
+func ParseCallback(data string) (action string, params []string) {
+	parts := strings.Split(data, ":")
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return parts[0], parts[1:]
+}
+
+// transitionState adds new state to history and updates current state
+func (b *Bot) transitionState(session *UserSession, newState UserState) {
+	session.StateHistory = append(session.StateHistory, newState)
+	session.State = newState
+}
+
+// addToRecentStations adds a station to the recent stations list
+// Maintains a max of 5 recent stations with most recent first
+func (b *Bot) addToRecentStations(session *UserSession, station utils.StationOption) {
+	// Remove if already exists (dedup)
+	for i, s := range session.RecentStations {
+		if s.Code == station.Code {
+			session.RecentStations = append(session.RecentStations[:i], session.RecentStations[i+1:]...)
+			break
+		}
+	}
+
+	// Add to front
+	session.RecentStations = append([]utils.StationOption{station}, session.RecentStations...)
+
+	// Keep only last 5
+	if len(session.RecentStations) > 5 {
+		session.RecentStations = session.RecentStations[:5]
+	}
 }
 
 func (b *Bot) ensureUser(ctx context.Context, telegramID int64, firstName, username string) (*domain.User, error) {
@@ -161,29 +209,21 @@ func (b *Bot) NewTripHandler(ctx context.Context, botClient *bot.Bot, update *mo
 			log.Printf("Ошибка регистрации пользователя: %v", err)
 		}
 	}
-	
+
 	session := b.getSession(telegramID)
-	session.State = StateWaitingFrom
+	// Reset session
+	session.State = StateSelectingFrom
+	session.StateHistory = []UserState{StateSelectingFrom}
 	session.From = ""
+	session.FromName = ""
 	session.To = ""
+	session.ToName = ""
 	session.Date = time.Now()
 	session.Schedule = nil
-	
-	text := "🚆 *Создание новой поездки*\n\n" +
-		"Шаг 1 из 3: *Введите станцию отправления*\n\n" +
-		"Вы можете ввести:\n" +
-		"• Код станции \\(например: s9613483\\)\n" +
-		"• Название станции \\(например: Таганрог\\)\n\n" +
-		"_Для отмены введите /cancel_"
+	session.SchedulePage = 0
 
-	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
-		Text:      text,
-		ParseMode: models.ParseModeMarkdown,
-	})
-	if err != nil {
-		log.Println(err)
-	}
+	// Show inline station selection
+	b.showStationSelection(ctx, botClient, update.Message.Chat.ID, session, "from")
 }
 
 func (b *Bot) MyTripsHandler(ctx context.Context, botClient *bot.Bot, update *models.Update) {
@@ -268,17 +308,25 @@ func (b *Bot) TextMessageHandler(ctx context.Context, botClient *bot.Bot, update
 	
 	switch session.State {
 	case StateWaitingFrom:
+		// Text input for "From" station
 		session.From = text
-		session.State = StateWaitingTo
-		
-		escapedText := escapeMarkdown(text)
+		session.FromName = text // Use text as display name for now
+		b.transitionState(session, StateWaitingTo)
+
+		// Try to add to recent if it's a known station
+		if station, found := utils.GetStationByCode(text); found {
+			session.FromName = station.DisplayName
+			b.addToRecentStations(session, station)
+		}
+
+		escapedText := escapeMarkdown(session.FromName)
 		msgText := fmt.Sprintf("✅ Станция отправления: *%s*\n\n"+
 			"Шаг 2 из 3: *Введите станцию назначения*\n\n"+
 			"Вы можете ввести:\n"+
 			"• Код станции \\(например: s9612913\\)\n"+
 			"• Название станции \\(например: Ростов\\-на\\-Дону\\)\n\n"+
 			"_Для отмены введите /cancel_", escapedText)
-		
+
 		_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:    update.Message.Chat.ID,
 			Text:      msgText,
@@ -287,30 +335,37 @@ func (b *Bot) TextMessageHandler(ctx context.Context, botClient *bot.Bot, update
 		if err != nil {
 			log.Println(err)
 		}
-		
+
 	case StateWaitingTo:
+		// Text input for "To" station
 		session.To = text
-		session.State = StateShowingSchedule
-		
+		session.ToName = text // Use text as display name for now
+		b.transitionState(session, StateShowingSchedule)
+
+		// Try to add to recent if it's a known station
+		if station, found := utils.GetStationByCode(text); found {
+			session.ToName = station.DisplayName
+			b.addToRecentStations(session, station)
+		}
+
 		options, err := b.tripUC.Search(ctx, session.From, session.To, session.Date)
 		if err != nil {
 			session.State = StateWaitingTo
 			sendErrorMessage(err, ctx, botClient, update)
 			return
 		}
-		
+
 		if len(options) == 0 {
 			session.State = StateWaitingTo
-			_, err = botClient.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "❌ Рейсы не найдены. Попробуйте другие станции или введите /cancel для отмены.",
-			})
-			if err != nil {
-				log.Println(err)
-			}
+			b.sendRecoverableError(ctx, botClient, update.Message.Chat.ID,
+				"Рейсы не найдены для этого маршрута.",
+				[]models.InlineKeyboardButton{
+					{Text: "🔄 Попробовать снова", CallbackData: "ef"},
+					{Text: "❌ Отменить", CallbackData: "x"},
+				})
 			return
 		}
-		
+
 		b.sendScheduleWithButtons(ctx, botClient, update, options, session)
 		
 	default:
@@ -325,39 +380,28 @@ func (b *Bot) TextMessageHandler(ctx context.Context, botClient *bot.Bot, update
 }
 
 func (b *Bot) sendScheduleWithButtons(ctx context.Context, botClient *bot.Bot, update *models.Update, options []*domain.Schedule, session *UserSession) {
-	text := buildScheduleText(options, session.From, session.To)
-	
-	session.Schedule = options
-	
-	var buttons [][]models.InlineKeyboardButton
-	for i := range options {
-		callbackData := fmt.Sprintf("train:%d", i)
-		
-		opt := options[i]
-		depTime := opt.DepartureTime.Format("15:04")
-		buttonText := fmt.Sprintf("🚆 %s → %s", depTime, opt.ArrivalTime.Format("15:04"))
-		
-		buttons = append(buttons, []models.InlineKeyboardButton{
-			{
-				Text:         buttonText,
-				CallbackData: callbackData,
-			},
-		})
+	// Use display names if available, fallback to codes
+	fromDisplay := session.FromName
+	if fromDisplay == "" {
+		fromDisplay = session.From
 	}
-	
-	buttons = append(buttons, []models.InlineKeyboardButton{
-		{
-			Text:         "❌ Отменить",
-			CallbackData: "cancel",
-		},
-	})
-	
+	toDisplay := session.ToName
+	if toDisplay == "" {
+		toDisplay = session.To
+	}
+
+	text := buildScheduleText(options, fromDisplay, toDisplay)
+	session.Schedule = options
+	session.SchedulePage = 0
+
+	// Use new pagination keyboard
+	keyboard := b.buildScheduleKeyboard(options, session.SchedulePage)
+
 	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   text,
-		ReplyMarkup: &models.InlineKeyboardMarkup{
-			InlineKeyboard: buttons,
-		},
+		ChatID:      update.Message.Chat.ID,
+		Text:        text,
+		// No ParseMode - avoid markdown escaping issues
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
 	})
 	if err != nil {
 		log.Println(err)
@@ -369,139 +413,218 @@ func (b *Bot) CallbackQueryHandler(ctx context.Context, botClient *bot.Bot, upda
 	if callbackQuery == nil || callbackQuery.Data == "" {
 		return
 	}
-	
+
 	telegramID := callbackQuery.From.ID
 	session := b.getSession(telegramID)
-	
-	callbackData := callbackQuery.Data
-	
-	if strings.HasPrefix(callbackData, "train:") {
-		indexStr := strings.TrimPrefix(callbackData, "train:")
-		index, err := strconv.Atoi(indexStr)
-		if err != nil {
-			log.Printf("Ошибка парсинга индекса поезда: %v", err)
-			return
-		}
-		
-		if session.Schedule == nil || index < 0 || index >= len(session.Schedule) {
-			sendCallbackError(ctx, botClient, callbackQuery, "Ошибка: расписание не найдено")
-			return
-		}
-		
-		opt := session.Schedule[index]
-		trainID := opt.TrainID
-		departureTime := opt.DepartureTime
-		
-		user, err := b.userUC.GetUserByTelegramID(ctx, telegramID)
-		if err != nil {
-			sendCallbackError(ctx, botClient, callbackQuery, "Ошибка получения данных пользователя")
-			return
-		}
-		
-		tr := &domain.Trip{
-			UserID:        user.ID,
-			From:          session.From,
-			To:            session.To,
-			DepartureTime: departureTime,
-		}
-		
-		err = b.tripUC.ConfirmTrip(ctx, tr)
-		if err != nil {
-			sendCallbackError(ctx, botClient, callbackQuery, fmt.Sprintf("Ошибка создания поездки: %s", err.Error()))
-			return
-		}
-		
-		b.clearSession(telegramID)
-		
-		depTime := departureTime.Format("02.01.2006 15:04")
-		escapedTrainID := escapeMarkdown(trainID)
-		escapedFrom := escapeMarkdown(session.From)
-		escapedTo := escapeMarkdown(session.To)
-		successText := fmt.Sprintf("✅ *Поездка успешно создана\\!*\n\n"+
-			"📋 *Детали поездки:*\n"+
-			"🚆 Поезд: *%s*\n"+
-			"📍 Маршрут: *%s* → *%s*\n"+
-			"🕒 Отправление: *%s*\n\n"+
-			"Я напомню вам за 30 минут до отправления\\. Приятной поездки\\! 🚂",
-			escapedTrainID, escapedFrom, escapedTo, depTime)
-		
-		var chatID int64
-		var messageID int
+
+	action, params := ParseCallback(callbackQuery.Data)
+
+	// Route to appropriate handler
+	switch action {
+	case "b": // Back
+		b.handleBack(ctx, botClient, callbackQuery, session)
+
+	case "x": // Cancel
+		b.handleCancel(ctx, botClient, callbackQuery, session)
+
+	case "ss": // Select Station
+		b.handleSelectStation(ctx, botClient, callbackQuery, session, params)
+
+	case "tr": // Select Train
+		b.handleTrainSelect(ctx, botClient, callbackQuery, session, params)
+
+	case "sp": // Schedule Page
+		b.handleSchedulePage(ctx, botClient, callbackQuery, session, params)
+
+	case "ef": // Edit From
+		session.State = StateSelectingFrom
+		b.transitionState(session, StateSelectingFrom)
 		if callbackQuery.Message.Message != nil {
-			msg := callbackQuery.Message.Message
-			chatID = msg.Chat.ID
-			messageID = msg.ID
-			_, err = botClient.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: messageID,
-				Text:      successText,
-			})
-			if err == nil {
-				_, _ = botClient.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-					CallbackQueryID: callbackQuery.ID,
-					Text:            "Поездка создана!",
-				})
-				return
-			}
+			b.showStationSelection(ctx, botClient, callbackQuery.Message.Message.Chat.ID, session, "from")
 		}
-		
-		if chatID == 0 {
-			chatID = callbackQuery.From.ID
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+
+	case "et": // Edit To
+		session.State = StateSelectingTo
+		b.transitionState(session, StateSelectingTo)
+		if callbackQuery.Message.Message != nil {
+			b.showStationSelection(ctx, botClient, callbackQuery.Message.Message.Chat.ID, session, "to")
 		}
-		_, err = botClient.SendMessage(ctx, &bot.SendMessageParams{
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+
+	case "text_input": // Fallback to text input
+		b.handleTextInputFallback(ctx, botClient, callbackQuery, session)
+
+	case "noop": // No operation (pagination indicator)
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+
+	default:
+		// Legacy support for old callback format
+		if strings.HasPrefix(callbackQuery.Data, "train:") || callbackQuery.Data == "cancel" {
+			b.handleLegacyCallback(ctx, botClient, callbackQuery, session)
+		} else {
+			b.answerCallback(ctx, botClient, callbackQuery.ID, "Неизвестная команда")
+		}
+	}
+}
+
+// handleCancel handles cancel action
+func (b *Bot) handleCancel(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession) {
+	b.clearSession(callbackQuery.From.ID)
+
+	var chatID int64
+	var messageID int
+	if callbackQuery.Message.Message != nil {
+		msg := callbackQuery.Message.Message
+		chatID = msg.Chat.ID
+		messageID = msg.ID
+		_, err := botClient.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
-			Text:      successText,
+			MessageID: messageID,
+			Text:      "❌ *Создание поездки отменено*\n\nВы можете начать заново командой /newtrip",
+			ParseMode: models.ParseModeMarkdown,
 		})
-		if err != nil {
-			log.Println(err)
+		if err == nil {
+			b.answerCallback(ctx, botClient, callbackQuery.ID, "Отменено")
+			return
 		}
-		
-		_, _ = botClient.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: callbackQuery.ID,
-			Text:            "Поездка создана!",
-		})
-		
+	}
+
+	if chatID == 0 {
+		chatID = callbackQuery.From.ID
+	}
+	_, _ = botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
+		Text:      "❌ *Создание поездки отменено*\n\nВы можете начать заново командой /newtrip",
+		ParseMode: models.ParseModeMarkdown,
+	})
+	b.answerCallback(ctx, botClient, callbackQuery.ID, "Отменено")
+}
+
+// handleTrainSelect handles train selection and trip confirmation
+func (b *Bot) handleTrainSelect(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession, params []string) {
+	if len(params) == 0 {
+		sendCallbackError(ctx, botClient, callbackQuery, "Ошибка: неверные параметры")
 		return
 	}
-	
-	if callbackData == "cancel" {
-		b.clearSession(telegramID)
-		
-		var chatID int64
-		var messageID int
-		if callbackQuery.Message.Message != nil {
-			msg := callbackQuery.Message.Message
-			chatID = msg.Chat.ID
-			messageID = msg.ID
-			_, err := botClient.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: messageID,
-				Text:      "❌ *Создание поездки отменено*\n\nВы можете начать заново командой /newtrip",
-			})
-			if err == nil {
-				_, _ = botClient.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-					CallbackQueryID: callbackQuery.ID,
-					Text:            "Отменено",
-				})
-				return
-			}
-		}
-		
-		if chatID == 0 {
-			chatID = callbackQuery.From.ID
-		}
-		_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
+
+	index, err := strconv.Atoi(params[0])
+	if err != nil {
+		sendCallbackError(ctx, botClient, callbackQuery, "Ошибка формата")
+		return
+	}
+
+	if session.Schedule == nil || index < 0 || index >= len(session.Schedule) {
+		sendCallbackError(ctx, botClient, callbackQuery, "Ошибка: расписание не найдено")
+		return
+	}
+
+	opt := session.Schedule[index]
+
+	user, err := b.userUC.GetUserByTelegramID(ctx, callbackQuery.From.ID)
+	if err != nil {
+		sendCallbackError(ctx, botClient, callbackQuery, "Ошибка получения данных пользователя")
+		return
+	}
+
+	tr := &domain.Trip{
+		UserID:        user.ID,
+		From:          session.From,
+		To:            session.To,
+		DepartureTime: opt.DepartureTime,
+	}
+
+	err = b.tripUC.ConfirmTrip(ctx, tr)
+	if err != nil {
+		sendCallbackError(ctx, botClient, callbackQuery, fmt.Sprintf("Ошибка: %s", err.Error()))
+		return
+	}
+
+	b.clearSession(callbackQuery.From.ID)
+
+	depTime := opt.DepartureTime.Format("02.01.2006 15:04")
+	escapedTrainID := escapeMarkdown(opt.TrainID)
+	escapedFrom := escapeMarkdown(session.FromName)
+	escapedTo := escapeMarkdown(session.ToName)
+
+	successText := fmt.Sprintf("✅ *Поездка успешно создана\\!*\n\n"+
+		"📋 *Детали поездки:*\n"+
+		"🚆 Поезд: *%s*\n"+
+		"📍 Маршрут: *%s* → *%s*\n"+
+		"🕒 Отправление: *%s*\n\n"+
+		"Я напомню вам за 30 минут до отправления\\. Приятной поездки\\! 🚂",
+		escapedTrainID, escapedFrom, escapedTo, depTime)
+
+	var chatID int64
+	var messageID int
+	if callbackQuery.Message.Message != nil {
+		msg := callbackQuery.Message.Message
+		chatID = msg.Chat.ID
+		messageID = msg.ID
+		_, err = botClient.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    chatID,
-			Text:      "❌ *Создание поездки отменено*\n\nВы можете начать заново командой /newtrip",
+			MessageID: messageID,
+			Text:      successText,
+			ParseMode: models.ParseModeMarkdown,
 		})
-		if err != nil {
-			log.Println(err)
+		if err == nil {
+			b.answerCallback(ctx, botClient, callbackQuery.ID, "Поездка создана!")
+			return
 		}
-		
-		_, _ = botClient.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: callbackQuery.ID,
-			Text:            "Отменено",
-		})
+	}
+
+	if chatID == 0 {
+		chatID = callbackQuery.From.ID
+	}
+	_, _ = botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
+		Text:      successText,
+		ParseMode: models.ParseModeMarkdown,
+	})
+	b.answerCallback(ctx, botClient, callbackQuery.ID, "Поездка создана!")
+}
+
+// handleTextInputFallback switches to text input mode
+func (b *Bot) handleTextInputFallback(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession) {
+	var text string
+	var newState UserState
+
+	if session.State == StateSelectingFrom {
+		text = "⌨️ *Введите название или код станции отправления*\n\nНапример: Таганрог или s9613483"
+		newState = StateWaitingFrom
+	} else if session.State == StateSelectingTo {
+		text = "⌨️ *Введите название или код станции назначения*\n\nНапример: Ростов-на-Дону или s9612913"
+		newState = StateWaitingTo
+	} else {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Ошибка состояния")
+		return
+	}
+
+	session.State = newState
+	b.transitionState(session, newState)
+
+	var chatID int64
+	if callbackQuery.Message.Message != nil {
+		chatID = callbackQuery.Message.Message.Chat.ID
+	} else {
+		chatID = callbackQuery.From.ID
+	}
+
+	_, _ = botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
+		Text:      text,
+		ParseMode: models.ParseModeMarkdown,
+	})
+	b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+}
+
+// handleLegacyCallback handles old callback format for backward compatibility
+func (b *Bot) handleLegacyCallback(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession) {
+	if strings.HasPrefix(callbackQuery.Data, "train:") {
+		params := []string{strings.TrimPrefix(callbackQuery.Data, "train:")}
+		b.handleTrainSelect(ctx, botClient, callbackQuery, session, params)
+	} else if callbackQuery.Data == "cancel" {
+		b.handleCancel(ctx, botClient, callbackQuery, session)
 	}
 }
 
@@ -511,6 +634,343 @@ func sendCallbackError(ctx context.Context, botClient *bot.Bot, callbackQuery *m
 		Text:            message,
 		ShowAlert:       true,
 	})
+}
+
+// answerCallback is a helper to answer callback queries
+func (b *Bot) answerCallback(ctx context.Context, botClient *bot.Bot, callbackID string, text string) {
+	_, _ = botClient.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		CallbackQueryID: callbackID,
+		Text:            text,
+	})
+}
+
+// showStationSelection displays inline keyboard with recent and popular stations
+func (b *Bot) showStationSelection(ctx context.Context, botClient *bot.Bot, chatID int64, session *UserSession, mode string) {
+	var text string
+	if mode == "from" {
+		text = "📍 Выберите станцию отправления\n\nВыберите из недавних или популярных:"
+	} else {
+		text = "📍 Выберите станцию назначения\n\nВыберите из недавних или популярных:"
+	}
+
+	buttons := [][]models.InlineKeyboardButton{}
+
+	// Recent stations (max 3)
+	if len(session.RecentStations) > 0 {
+		for i, station := range session.RecentStations {
+			if i >= 3 {
+				break
+			}
+			buttons = append(buttons, []models.InlineKeyboardButton{
+				{
+					Text:         "🕒 " + station.DisplayName,
+					CallbackData: fmt.Sprintf("ss:r%d", i),
+				},
+			})
+		}
+	}
+
+	// Popular stations (top 7)
+	for i := 0; i < 7 && i < len(utils.PopularStations); i++ {
+		station := utils.PopularStations[i]
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{
+				Text:         "📍 " + station.DisplayName,
+				CallbackData: fmt.Sprintf("ss:p%d", i),
+			},
+		})
+	}
+
+	// Text input fallback
+	buttons = append(buttons, []models.InlineKeyboardButton{
+		{Text: "⌨️ Ввести название", CallbackData: "text_input"},
+	})
+
+	// Navigation
+	navRow := []models.InlineKeyboardButton{}
+	if mode == "to" {
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         "◀️ Назад",
+			CallbackData: "b",
+		})
+	}
+	navRow = append(navRow, models.InlineKeyboardButton{
+		Text:         "❌ Отменить",
+		CallbackData: "x",
+	})
+	buttons = append(buttons, navRow)
+
+	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		// No ParseMode - avoid markdown escaping issues
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: buttons},
+	})
+	if err != nil {
+		log.Printf("Error sending station selection: %v", err)
+	}
+}
+
+// buildScheduleKeyboard builds paginated schedule keyboard
+func (b *Bot) buildScheduleKeyboard(schedules []*domain.Schedule, page int) [][]models.InlineKeyboardButton {
+	buttons := [][]models.InlineKeyboardButton{}
+
+	pageSize := 5
+	totalPages := (len(schedules) + pageSize - 1) / pageSize
+	start := page * pageSize
+	end := start + pageSize
+	if end > len(schedules) {
+		end = len(schedules)
+	}
+
+	// Train buttons for current page
+	for i := start; i < end; i++ {
+		sch := schedules[i]
+		depTime := sch.DepartureTime.Format("15:04")
+		arrTime := sch.ArrivalTime.Format("15:04")
+		duration := humanDurationFromSeconds(int(sch.Duration))
+
+		buttonText := fmt.Sprintf("🚆 %s | %s → %s (%s)",
+			sch.TrainID, depTime, arrTime, duration)
+
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{
+				Text:         buttonText,
+				CallbackData: fmt.Sprintf("tr:%d", i),
+			},
+		})
+	}
+
+	// Pagination row
+	if totalPages > 1 {
+		navRow := []models.InlineKeyboardButton{}
+
+		if page > 0 {
+			navRow = append(navRow, models.InlineKeyboardButton{
+				Text:         "◀️",
+				CallbackData: fmt.Sprintf("sp:%d", page-1),
+			})
+		}
+
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         fmt.Sprintf("%d/%d", page+1, totalPages),
+			CallbackData: "noop",
+		})
+
+		if page < totalPages-1 {
+			navRow = append(navRow, models.InlineKeyboardButton{
+				Text:         "▶️",
+				CallbackData: fmt.Sprintf("sp:%d", page+1),
+			})
+		}
+
+		buttons = append(buttons, navRow)
+	}
+
+	// Actions row
+	buttons = append(buttons, []models.InlineKeyboardButton{
+		{Text: "◀️ Назад", CallbackData: "b"},
+		{Text: "✏️ Изменить", CallbackData: "ef"},
+		{Text: "❌ Отменить", CallbackData: "x"},
+	})
+
+	return buttons
+}
+
+// handleBack handles back navigation
+func (b *Bot) handleBack(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession) {
+	if len(session.StateHistory) < 2 {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Нет предыдущего шага")
+		return
+	}
+
+	// Pop current state
+	session.StateHistory = session.StateHistory[:len(session.StateHistory)-1]
+	previousState := session.StateHistory[len(session.StateHistory)-1]
+	session.State = previousState
+
+	chatID := callbackQuery.Message.Message.Chat.ID
+
+	// Render appropriate screen
+	switch previousState {
+	case StateSelectingFrom:
+		b.showStationSelection(ctx, botClient, chatID, session, "from")
+	case StateSelectingTo:
+		b.showStationSelection(ctx, botClient, chatID, session, "to")
+	case StateShowingSchedule:
+		b.sendScheduleMessage(ctx, botClient, chatID, session)
+	default:
+		session.State = StateNone
+		b.clearSession(callbackQuery.From.ID)
+	}
+
+	b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+}
+
+// handleSelectStation handles station selection from inline keyboard
+func (b *Bot) handleSelectStation(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession, params []string) {
+	if len(params) == 0 {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Ошибка: неверные параметры")
+		return
+	}
+
+	var selectedStation utils.StationOption
+	var found bool
+
+	indexStr := params[0]
+	if strings.HasPrefix(indexStr, "r") {
+		// Recent station
+		idx, err := strconv.Atoi(indexStr[1:])
+		if err != nil || idx < 0 || idx >= len(session.RecentStations) {
+			b.answerCallback(ctx, botClient, callbackQuery.ID, "Станция не найдена")
+			return
+		}
+		selectedStation = session.RecentStations[idx]
+		found = true
+	} else if strings.HasPrefix(indexStr, "p") {
+		// Popular station
+		idx, err := strconv.Atoi(indexStr[1:])
+		if err != nil {
+			b.answerCallback(ctx, botClient, callbackQuery.ID, "Ошибка формата")
+			return
+		}
+		selectedStation, found = utils.GetStationByIndex(idx)
+	}
+
+	if !found {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Станция не найдена")
+		return
+	}
+
+	// Add to recent stations
+	b.addToRecentStations(session, selectedStation)
+
+	chatID := callbackQuery.Message.Message.Chat.ID
+
+	// Update session based on current state
+	if session.State == StateSelectingFrom {
+		session.From = selectedStation.Code
+		session.FromName = selectedStation.DisplayName
+
+		// Transition to selecting "To"
+		b.transitionState(session, StateSelectingTo)
+		b.showStationSelection(ctx, botClient, chatID, session, "to")
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "✓ "+selectedStation.DisplayName)
+
+	} else if session.State == StateSelectingTo {
+		session.To = selectedStation.Code
+		session.ToName = selectedStation.DisplayName
+
+		// Search for schedules
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Поиск расписания...")
+
+		filteredOptions, err := b.tripUC.Search(ctx, session.From, session.To, session.Date)
+		if err != nil {
+			b.sendRecoverableError(ctx, botClient, chatID,
+				fmt.Sprintf("Ошибка поиска: %v", err),
+				[]models.InlineKeyboardButton{
+					{Text: "🔄 Попробовать снова", CallbackData: "ef"},
+					{Text: "❌ Отменить", CallbackData: "x"},
+				})
+			return
+		}
+
+		if len(filteredOptions) == 0 {
+			b.sendRecoverableError(ctx, botClient, chatID,
+				"Рейсы не найдены для этого маршрута.",
+				[]models.InlineKeyboardButton{
+					{Text: "🔄 Другие станции", CallbackData: "ef"},
+					{Text: "❌ Отменить", CallbackData: "x"},
+				})
+			return
+		}
+
+		session.Schedule = filteredOptions
+		session.SchedulePage = 0
+		b.transitionState(session, StateShowingSchedule)
+		b.sendScheduleMessage(ctx, botClient, chatID, session)
+	}
+}
+
+// handleSchedulePage handles schedule pagination
+func (b *Bot) handleSchedulePage(ctx context.Context, botClient *bot.Bot, callbackQuery *models.CallbackQuery, session *UserSession, params []string) {
+	if len(params) == 0 {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Ошибка: неверная страница")
+		return
+	}
+
+	page, err := strconv.Atoi(params[0])
+	if err != nil {
+		b.answerCallback(ctx, botClient, callbackQuery.ID, "Ошибка формата")
+		return
+	}
+
+	session.SchedulePage = page
+
+	// Update message with new page
+	chatID := callbackQuery.Message.Message.Chat.ID
+	messageID := callbackQuery.Message.Message.ID
+
+	text := buildScheduleText(session.Schedule, session.FromName, session.ToName)
+	keyboard := b.buildScheduleKeyboard(session.Schedule, page)
+
+	_, err = botClient.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        text,
+		// No ParseMode - avoid markdown escaping issues
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
+	})
+
+	if err != nil {
+		log.Printf("Error editing message: %v", err)
+		// Fallback: send new message
+		b.sendScheduleMessage(ctx, botClient, chatID, session)
+	}
+
+	b.answerCallback(ctx, botClient, callbackQuery.ID, "")
+}
+
+// sendScheduleMessage sends schedule message with pagination
+func (b *Bot) sendScheduleMessage(ctx context.Context, botClient *bot.Bot, chatID int64, session *UserSession) {
+	text := buildScheduleText(session.Schedule, session.FromName, session.ToName)
+	keyboard := b.buildScheduleKeyboard(session.Schedule, session.SchedulePage)
+
+	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		// No ParseMode - avoid markdown escaping issues
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
+	})
+	if err != nil {
+		log.Printf("Error sending schedule: %v", err)
+	}
+}
+
+// sendRecoverableError sends error message with recovery action buttons
+func (b *Bot) sendRecoverableError(ctx context.Context, botClient *bot.Bot, chatID int64, errorMsg string, actions []models.InlineKeyboardButton) {
+	text := fmt.Sprintf("⚠️ Ошибка\n\n%s\n\nЧто делать?", errorMsg)
+
+	buttons := [][]models.InlineKeyboardButton{}
+
+	// Add action buttons in pairs
+	for i := 0; i < len(actions); i += 2 {
+		row := []models.InlineKeyboardButton{actions[i]}
+		if i+1 < len(actions) {
+			row = append(row, actions[i+1])
+		}
+		buttons = append(buttons, row)
+	}
+
+	_, err := botClient.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		// No ParseMode - avoid markdown escaping issues
+		ReplyMarkup: &models.InlineKeyboardMarkup{InlineKeyboard: buttons},
+	})
+	if err != nil {
+		log.Printf("Error sending recoverable error: %v", err)
+	}
 }
 
 func (b *Bot) RegisterHandlers() {
@@ -591,25 +1051,22 @@ func escapeMarkdown(text string) string {
 
 func buildScheduleText(options []*domain.Schedule, from, to string) string {
 	var b strings.Builder
-	b.WriteString("🚆 *Расписание рейсов*\n\n")
-	escapedFrom := escapeMarkdown(from)
-	escapedTo := escapeMarkdown(to)
-	b.WriteString(fmt.Sprintf("📍 *%s* → *%s*\n\n", escapedFrom, escapedTo))
+	b.WriteString("🚆 Расписание рейсов\n\n")
+	fmt.Fprintf(&b, "📍 %s → %s\n\n", from, to)
 	b.WriteString("Выберите поезд:\n\n")
 
 	for i, opt := range options {
 		num := i + 1
-		title := escapeMarkdown(cleanTitle(opt.Title))
-		escapedTrainID := escapeMarkdown(opt.TrainID)
+		title := cleanTitle(opt.Title)
 
 		dep := opt.DepartureTime.Format("02.01.2006 15:04")
 		arr := opt.ArrivalTime.Format("15:04")
 		durationStr := humanDurationFromSeconds(int(opt.Duration))
 
-		b.WriteString(fmt.Sprintf("*%d\\.* %s\n", num, title))
-		b.WriteString(fmt.Sprintf("   🚆 Поезд: `%s`\n", escapedTrainID))
-		b.WriteString(fmt.Sprintf("   🕒 %s → %s\n", dep, arr))
-		b.WriteString(fmt.Sprintf("   ⏱ %s\n\n", durationStr))
+		fmt.Fprintf(&b, "%d. %s\n", num, title)
+		fmt.Fprintf(&b, "   🚆 Поезд: %s\n", opt.TrainID)
+		fmt.Fprintf(&b, "   🕒 %s → %s\n", dep, arr)
+		fmt.Fprintf(&b, "   ⏱ %s\n\n", durationStr)
 	}
 
 	return b.String()

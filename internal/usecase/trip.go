@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/X1ag/TravelScheduler/internal/domain"
+	"github.com/X1ag/TravelScheduler/internal/utils"
 )
 
 
@@ -49,23 +50,21 @@ func (t *TripUsecase) Search(ctx context.Context, from, to string, startDate tim
 	if err != nil {
 		return nil, err
 	}
-	
+
 	filteredOptions := t.filteredOptions(allOptions, startDate)
 
-	// retry 
+	// retry
 	if len(filteredOptions) == 0 {
 		tomorrow := time.Date(startDate.Year(), startDate.Month(), startDate.Day()+1, 0, 0, 0, 0, startDate.Location())
 		tomorrowOptions, err := t.yandex.GetNextTrains(ctx, from, to, tomorrow)
 		if err != nil {
 			return nil, err
 		}
-		filteredOptions = t.filteredOptions(tomorrowOptions, tomorrow)	
+		filteredOptions = t.filteredOptions(tomorrowOptions, tomorrow)
 	}
 
-	if len(filteredOptions) > 5 {
-		filteredOptions = filteredOptions[:5]
-	}
-
+	// REMOVED: 5-train limit
+	// Return ALL available trains, pagination handled in UI layer
 	return filteredOptions, nil
 }
 
@@ -83,10 +82,14 @@ func (t *TripUsecase) ConfirmTrip(ctx context.Context, tr *domain.Trip) error {
 	if err := t.Create(ctx, tr); err != nil {
 		return err
 	}
+	station, exists := utils.GetStationByCode(tr.From)
+	if !exists {
+		return errors.New("Станция отправления не найдена") 
+	}
 	return t.reminderRepo.Create(ctx, &domain.Reminder{
 		TripID:    tr.ID,
 		UserID:    tr.UserID,
-		Message:   fmt.Sprintf("Вы начали поездку %s", tr.From),
+		Message:   fmt.Sprintf("Ваша поездка со станции %s начнется через 30 минут! Не опоздайте!", station),
 		TriggerAt: tr.DepartureTime.Add(-30 * time.Minute),
 		Status: string(domain.StatusPending),
 	})
