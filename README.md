@@ -1,9 +1,186 @@
-# travel-scheduler 
+# Travel Scheduler Bot
 
-#### Этот пет проект - закрепление материала работы с базами данных и структурой проекта. Так же это изучение того как пишутся телеграм боты на го. 
-## Суть проекта:
- - Сохранять время запланированной поездки и выводить уведомление с напоминанием
- - Напоминать читать книгу(во время поездки)
- - Запоминать кол-во прочитанных страниц и считать скорость чтения 
- - Выбирать самый оптимальное время поездки 
+Telegram-бот для управления поездками на пригородных электричках с автоматическими напоминаниями.
 
+## Описание
+
+Бот интегрирован с Яндекс.Расписаниями для получения актуального расписания и автоматически отправляет уведомления за 30 минут до отправления.
+
+### Функциональность
+
+- Поиск расписания электричек с пагинацией
+- Автоматические напоминания за 30 минут до отправления
+- Inline-клавиатуры для выбора станций
+- История навигации с возможностью вернуться назад
+- Отслеживание прочитанных страниц книг
+
+## Технологический стек
+
+**Backend:** Go 1.25, PostgreSQL 16, pgx/v5, golang-migrate
+**Infrastructure:** Docker Compose, Telegram Bot API, Yandex.Rasp API
+**Архитектура:** Clean Architecture
+
+## Архитектура
+
+Проект построен по принципам Clean Architecture:
+
+```
+internal/
+├── domain/          # Бизнес-сущности и интерфейсы
+├── usecase/         # Бизнес-логика
+├── repository/      # Работа с БД
+└── infrastructure/  # Внешние сервисы (Yandex API)
+
+transport/
+├── telegram/        # Telegram Bot handlers
+└── worker/          # Background worker для напоминаний
+```
+
+### Ключевые решения
+
+**Clean Architecture**
+- Разделение на слои domain, usecase, repository, transport
+- Dependency Inversion через интерфейсы
+- Repository pattern для абстракции БД
+
+**Конкурентность**
+- Background worker на goroutines для обработки напоминаний
+- Thread-safe управление сессиями (sync.RWMutex)
+- Concurrent обработка входящих сообщений
+
+**UX**
+- State machine для управления диалогом
+- In-memory кэш последних использованных станций
+- Inline-кнопки вместо текстового ввода
+
+## Структура проекта
+
+```
+.
+├── cmd/bot/                    # Точка входа
+├── internal/
+│   ├── domain/                 # User, Trip, Book, Schedule
+│   ├── usecase/                # TripUsecase, BookUsecase
+│   ├── repository/postgres/    # PostgreSQL repositories
+│   └── infrastructure/yandex/  # Yandex.Rasp API client
+├── transport/
+│   ├── telegram/               # Bot handlers
+│   └── worker/                 # Background reminders
+└── migrations/                 # SQL migrations
+```
+
+## База данных
+
+**users**
+```sql
+id, telegram_id (UNIQUE), name, username, created_at
+```
+
+**trips**
+```sql
+id, user_id (FK), from_station, to_station, departure_time, created_at
+```
+
+**reminders**
+```sql
+id, trip_id (FK), trigger_at, is_sent, sent_at
+```
+
+**books**
+```sql
+id, user_id (FK), book_name, author, pages_count, pages_read, created_at
+```
+
+## Установка
+
+### Требования
+- Go 1.25+
+- Docker & Docker Compose
+- Telegram Bot Token
+- Yandex.Rasp API Key
+
+### Запуск
+
+```bash
+# Клонировать репозиторий
+git clone https://github.com/X1ag/TravelScheduler.git
+cd TravelScheduler
+
+# Настроить окружение
+cp config/env.example .env
+# Заполнить DB_*, TELEGRAM_BOT_TOKEN, YANDEX_API_KEY
+
+# Запустить БД
+docker-compose up -d
+
+# Применить миграции
+go run cmd/bot/main.go migrate
+
+# Запустить бота
+go run cmd/bot/main.go
+```
+
+## Использование
+
+**Команды:**
+- `/start` — регистрация
+- `/newtrip` — создать поездку
+- `/mytrips` — список поездок
+- `/help` — справка
+- `/cancel` — отмена
+
+**Процесс создания поездки:**
+1. `/newtrip`
+2. Выбор станции отправления
+3. Выбор станции назначения
+4. Выбор поезда из расписания
+5. Подтверждение
+
+## Технические детали
+
+### Worker для напоминаний
+
+Background процесс проверяет БД каждые 10 секунд и отправляет напоминания:
+
+```go
+ticker := time.NewTicker(10 * time.Second)
+for {
+    select {
+    case <-ticker.C:
+        reminders := fetchPendingReminders()
+        sendReminders(reminders)
+    case <-ctx.Done():
+        return
+    }
+}
+```
+
+### Интеграция с Yandex.Rasp API
+
+- Поиск по коду станции
+- Фильтрация по типу транспорта (suburban)
+- Обработка пагинации и ошибок
+
+### Оптимизации
+
+- Database connection pooling через pgx
+- Graceful shutdown для worker
+- Error recovery с inline-кнопками
+- Stateless architecture
+
+## Развитие
+
+- [ ] Персистентность сессий (Redis)
+- [ ] Избранные маршруты
+- [ ] Выбор даты поездки
+- [ ] Метрики (Prometheus)
+- [ ] Unit & Integration тесты
+- [ ] CI/CD
+
+## Лицензия
+
+MIT
+
+---
+
+**Go • PostgreSQL • Telegram Bot API • Docker • Clean Architecture**
